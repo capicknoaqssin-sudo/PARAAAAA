@@ -1,0 +1,1501 @@
+-- \    /  \                                   ,--,                                    ___                        
+-- |   :    \   ,--,                         ,--.'|   ,-.----.                       ,--.'|_                      
+-- |   |  .\ :,--.'|                         |  | :   \    /  \    ,---.    __  ,-.  |  | :,'             __  ,-. 
+-- .   :  |: ||  |,     ,--,  ,--,           :  : '   |   :    |  '   ,'\ ,' ,'/ /|  :  : ' :           ,' ,'/ /| 
+-- |   |   \ :`--'_     |'. \/ .`|    ,---.  |  ' |   |   | .\ : /   /   |'  | |' |.;__,'  /     ,---.  '  | |' | 
+-- |   : .   /,' ,'|    '  \/  / ;   /     \ '  | |   .   : |: |.   ; ,. :|  |   ,'|  |   |     /     \ |  |   ,' 
+-- ;   | |`-' '  | |     \  \.' /   /    /  ||  | :   |   |  \ :'   | |: :'  :  /  :__,'| :    /    /  |'  :  /   
+-- |   | ;    |  | :      \  ;  ;  .    ' / |'  : |__ |   : .  |'   | .; :|  | '     '  : |__ .    ' / ||  | '    
+-- :   ' |    '  : |__   / \  \  \ '   ;   /||  | '.'|:     |`-'|   :    |;  : |     |  | '.'|'   ;   /|;  : |    
+-- :   : :    |  | '.'|./__;   ;  \'   |  / |;  :    ;:   : :    \   \  / |  , ;     ;  :    ;'   |  / ||  , ;    
+-- |   | :    ;  :    ;|   :/\  \ ;|   :    ||  ,   / |   | :     `----'   ---'      |  ,   / |   :    | ---'     
+-- `---'.|    |  ,   / `---'  `--`  \   \  /  ---`-'  `---'.|                         ---`-'   \   \  /           
+--   `---`     ---`-'                `----'             `---`                                   `----'            
+                                                                                                               
+
+-- open source LOL
+
+-- Join https://discord.gg/dhDp9ZnPvH
+
+-- By @ryn._lost
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+
+local function createMinihookFolder()
+    if not isfolder("minihook") then
+        makefolder("minihook")
+    end
+end
+
+local function getFilesInFolder()
+    if isfolder("minihook") then
+        return listfiles("minihook")
+    end
+    return {}
+end
+
+local function readFileContent(filename)
+    if isfile("minihook/" .. filename) then
+        return readfile("minihook/" .. filename)
+    end
+    return '{"Width":10,"Height":10,"Pixels":[[255,0,0],[0,255,0]]}'
+end
+
+if CoreGui:FindFirstChild("minihook") then
+    CoreGui:FindFirstChild("minihook"):Destroy()
+end
+
+createMinihookFolder()
+
+local spr = {}
+local activeSprings = {}
+local completionCallbacks = {}
+
+local Spring = {}
+Spring.__index = Spring
+
+function Spring.new(dampingRatio, frequency, position, goal, typeData)
+    return setmetatable({
+        d = dampingRatio,
+        f = frequency,
+        g = typeData.toIntermediate(goal),
+        p = typeData.toIntermediate(position),
+        v = table.create(#typeData.toIntermediate(goal), 0),
+        typeData = typeData,
+        rawGoal = goal
+    }, Spring)
+end
+
+function Spring:setGoal(goal)
+    self.rawGoal = goal
+    self.g = self.typeData.toIntermediate(goal)
+end
+
+function Spring:setDampingRatio(dampingRatio)
+    self.d = dampingRatio
+end
+
+function Spring:setFrequency(frequency)
+    self.f = frequency
+end
+
+function Spring:canSleep()
+    local velocityMagnitudeSq = 0
+    for _, v in ipairs(self.v) do
+        velocityMagnitudeSq = velocityMagnitudeSq + v * v
+    end
+    if velocityMagnitudeSq > 0.0001 then
+        return false
+    end
+
+    local positionErrorSq = 0
+    for i, p in ipairs(self.p) do
+        positionErrorSq = positionErrorSq + (self.g[i] - p) * (self.g[i] - p)
+    end
+    return positionErrorSq < 0.0001
+end
+
+function Spring:step(dt)
+    local d = self.d
+    local f = self.f * 2 * math.pi
+    local g = self.g
+    local p = self.p
+    local v = self.v
+
+    if d == 1 then
+        local e = math.exp(-f * dt)
+        local te = dt * e
+
+        for i = 1, #p do
+            local x = p[i] - g[i]
+            p[i] = (x * (e + te * f) + v[i] * te) + g[i]
+            v[i] = v[i] * (e - te * f) - x * (te * f * f)
+        end
+    elseif d < 1 then
+        local e = math.exp(-d * f * dt)
+        local c = math.sqrt(1 - d * d)
+        local cs = math.cos(dt * f * c)
+        local sn = math.sin(dt * f * c)
+        local snc = sn / c
+
+        for i = 1, #p do
+            local x = p[i] - g[i]
+            p[i] = (x * (cs + snc * d) + v[i] * (sn / (f * c))) * e + g[i]
+            v[i] = (v[i] * (cs - snc * d) - x * (snc * f)) * e
+        end
+    end
+
+    return self.typeData.fromIntermediate(self.p)
+end
+
+local TYPE_DATA = {
+    UDim2 = {
+        toIntermediate = function(value)
+            return {value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset}
+        end,
+        fromIntermediate = function(values)
+            return UDim2.new(values[1], math.round(values[2]), values[3], math.round(values[4]))
+        end
+    },
+    number = {
+        toIntermediate = function(value)
+            return {value}
+        end,
+        fromIntermediate = function(values)
+            return values[1]
+        end
+    }
+}
+
+RunService.Heartbeat:Connect(function(dt)
+    for instance, springs in pairs(activeSprings) do
+        for property, spring in pairs(springs) do
+            if spring:canSleep() then
+                springs[property] = nil
+                instance[property] = spring.rawGoal
+            else
+                local newValue = spring:step(dt)
+                instance[property] = newValue
+            end
+        end
+
+        if not next(springs) then
+            activeSprings[instance] = nil
+            local callbacks = completionCallbacks[instance]
+            if callbacks then
+                completionCallbacks[instance] = nil
+                for _, callback in ipairs(callbacks) do
+                    task.spawn(callback)
+                end
+            end
+        end
+    end
+end)
+
+function spr.target(instance, dampingRatio, frequency, properties)
+    local springs = activeSprings[instance]
+    if not springs then
+        springs = {}
+        activeSprings[instance] = springs
+    end
+
+    for property, targetValue in pairs(properties) do
+        local currentValue = instance[property]
+        local typeData = TYPE_DATA[typeof(targetValue)]
+        
+        if typeData then
+            local spring = springs[property]
+            if not spring then
+                spring = Spring.new(dampingRatio, frequency, currentValue, targetValue, typeData)
+                springs[property] = spring
+            else
+                spring:setGoal(targetValue)
+                spring:setDampingRatio(dampingRatio)
+                spring:setFrequency(frequency)
+            end
+        else
+            instance[property] = targetValue
+        end
+    end
+
+    if not next(springs) then
+        activeSprings[instance] = nil
+    end
+end
+
+function spr.completed(instance, callback)
+    local callbacks = completionCallbacks[instance]
+    if callbacks then
+        table.insert(callbacks, callback)
+    else
+        completionCallbacks[instance] = {callback}
+    end
+end
+
+local popUIFrames = {}
+local originalPositions = {}
+
+function PopUIFrame(frame)
+    if table.find(popUIFrames, frame) then
+        return
+    end
+
+    if not originalPositions[frame] then
+        originalPositions[frame] = frame.Position
+    end
+
+    local origPos = originalPositions[frame]
+    local posX, offsetX = origPos.X.Scale, origPos.X.Offset
+    local posY, offsetY = origPos.Y.Scale, origPos.Y.Offset
+
+    frame.Position = UDim2.new(posX, offsetX, posY + 0.05, offsetY)
+    table.insert(popUIFrames, frame)
+
+    spr.target(frame, 0.7, 6, {
+        Position = origPos,
+    })
+
+    spr.completed(frame, function()
+        local index = table.find(popUIFrames, frame)
+        if index then
+            table.remove(popUIFrames, index)
+        end
+    end)
+end
+
+function ShrinkUIFrame(frame, shouldHide)
+    if table.find(popUIFrames, frame) then
+        return
+    end
+
+    local origPos = originalPositions[frame] or frame.Position
+    local posX, offsetX = origPos.X.Scale, origPos.X.Offset
+    local posY, offsetY = origPos.Y.Scale, origPos.Y.Offset
+
+    table.insert(popUIFrames, frame)
+
+    spr.target(frame, 0.7, 6, {
+        Position = UDim2.new(posX, offsetX, posY + 0.05, offsetY),
+    })
+
+    spr.completed(frame, function()
+        local index = table.find(popUIFrames, frame)
+        if index then
+            table.remove(popUIFrames, index)
+        end
+        if shouldHide then
+            frame.Visible = false
+        end
+    end)
+end
+
+local Converted = {
+    ["_minihook"] = Instance.new("ScreenGui");
+    ["_background"] = Instance.new("Frame");
+    ["_UICorner"] = Instance.new("UICorner");
+    ["_UIStroke"] = Instance.new("UIStroke");
+    ["_topbar"] = Instance.new("Frame");
+    ["_UICorner1"] = Instance.new("UICorner");
+    ["_UIGradient"] = Instance.new("UIGradient");
+    ["_cornerfix"] = Instance.new("Frame");
+    ["_outline"] = Instance.new("Frame");
+    ["_container"] = Instance.new("Frame");
+    ["_UIPadding"] = Instance.new("UIPadding");
+    ["_UIListLayout"] = Instance.new("UIListLayout");
+    ["_title"] = Instance.new("TextLabel");
+    ["_versionframe"] = Instance.new("Frame");
+    ["_UICorner2"] = Instance.new("UICorner");
+    ["_versiontext"] = Instance.new("TextLabel");
+    ["_UIStroke1"] = Instance.new("UIStroke");
+    ["_close"] = Instance.new("ImageLabel");
+    ["_TextButton"] = Instance.new("TextButton");
+    ["_split"] = Instance.new("Frame");
+    ["_holder"] = Instance.new("Frame");
+    
+    ["_tabframe"] = Instance.new("Frame");
+    ["_UICorner7"] = Instance.new("UICorner");
+    ["_UIStroke7"] = Instance.new("UIStroke");
+    ["_UIListLayout2"] = Instance.new("UIListLayout");
+    ["_textinputtab"] = Instance.new("TextButton");
+    ["_UICorner10"] = Instance.new("UICorner");
+    ["_UIStroke10"] = Instance.new("UIStroke");
+    ["_filebrowsertab"] = Instance.new("TextButton");
+    ["_UICorner11"] = Instance.new("UICorner");
+    ["_UIStroke11"] = Instance.new("UIStroke");
+    
+    -- FIRST TAB (KEEP ORIGINAL)
+    ["_textcontainer"] = Instance.new("Frame");
+    ["_UIStroke2"] = Instance.new("UIStroke");
+    ["_UICorner3"] = Instance.new("UICorner");
+    ["_UIListLayout1"] = Instance.new("UIListLayout");
+    ["_textboxframe"] = Instance.new("Frame");
+    ["_TextBox"] = Instance.new("TextBox");
+    ["_UICorner4"] = Instance.new("UICorner");
+    ["_UIPadding1"] = Instance.new("UIPadding");
+    ["_UIStroke3"] = Instance.new("UIStroke");
+    ["_UIPadding2"] = Instance.new("UIPadding");
+    ["_buttonframe"] = Instance.new("Frame");
+    ["_UICorner5"] = Instance.new("UICorner");
+    ["_UIStroke4"] = Instance.new("UIStroke");
+    ["_TextButton1"] = Instance.new("TextButton");
+    
+    -- SECOND TAB (COPY OF FIRST TAB)
+    ["_filecontainer"] = Instance.new("Frame");
+    ["_UIStroke8"] = Instance.new("UIStroke");
+    ["_UICorner8"] = Instance.new("UICorner");
+    ["_UIListLayout9"] = Instance.new("UIListLayout");
+    ["_filescrollframe"] = Instance.new("Frame");
+    ["_filescroll"] = Instance.new("ScrollingFrame");
+    ["_UICorner12"] = Instance.new("UICorner");
+    ["_UIPadding9"] = Instance.new("UIPadding");
+    ["_UIStroke12"] = Instance.new("UIStroke");
+    ["_UIListLayout3"] = Instance.new("UIListLayout");
+    ["_UIPadding4"] = Instance.new("UIPadding");
+    ["_UIPadding10"] = Instance.new("UIPadding");
+    ["_refreshframe"] = Instance.new("Frame");
+    ["_UICorner13"] = Instance.new("UICorner");
+    ["_UIStroke13"] = Instance.new("UIStroke");
+    ["_refreshbutton"] = Instance.new("TextButton");
+    
+    ["_UIPadding3"] = Instance.new("UIPadding");
+    ["_UIScale"] = Instance.new("UIScale");
+    ["_credits"] = Instance.new("TextLabel");
+    ["_UIStroke5"] = Instance.new("UIStroke");
+    ["_openbutton"] = Instance.new("Frame");
+    ["_UICorner6"] = Instance.new("UICorner");
+    ["_UIStroke6"] = Instance.new("UIStroke");
+    ["_TextButton2"] = Instance.new("TextButton");
+    ["_UIGradient3"] = Instance.new("UIGradient");
+}
+
+Converted["_minihook"].ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Converted["_minihook"].Name = "minihook"
+Converted["_minihook"].Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+Converted["_minihook"].IgnoreGuiInset = true
+Converted["_minihook"].ResetOnSpawn = false
+
+Converted["_background"].AnchorPoint = Vector2.new(0.5, 0.5)
+Converted["_background"].BackgroundColor3 = Color3.fromRGB(16, 18, 21)
+Converted["_background"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_background"].BorderSizePixel = 0
+Converted["_background"].Position = UDim2.new(0.5, 0, 0.5, 0)
+Converted["_background"].Size = UDim2.new(0, 475, 0, 280)
+Converted["_background"].Name = "background"
+Converted["_background"].Parent = Converted["_minihook"]
+Converted["_background"].Visible = true
+
+Converted["_UICorner"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner"].Parent = Converted["_background"]
+
+Converted["_UIStroke"].Color = Color3.fromRGB(26, 30, 35)
+Converted["_UIStroke"].Parent = Converted["_background"]
+
+Converted["_topbar"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_topbar"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_topbar"].BorderSizePixel = 0
+Converted["_topbar"].Size = UDim2.new(1, 0, 0, 44)
+Converted["_topbar"].Name = "topbar"
+Converted["_topbar"].Parent = Converted["_background"]
+
+Converted["_UICorner1"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner1"].Parent = Converted["_topbar"]
+
+Converted["_UIGradient"].Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 25, 29)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 21, 24))
+}
+Converted["_UIGradient"].Rotation = 90
+Converted["_UIGradient"].Parent = Converted["_topbar"]
+
+Converted["_cornerfix"].AnchorPoint = Vector2.new(0, 1)
+Converted["_cornerfix"].BackgroundColor3 = Color3.fromRGB(18, 21, 24)
+Converted["_cornerfix"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_cornerfix"].BorderSizePixel = 0
+Converted["_cornerfix"].Position = UDim2.new(0, 0, 1, 0)
+Converted["_cornerfix"].Size = UDim2.new(1, 0, 0, 3)
+Converted["_cornerfix"].Name = "cornerfix"
+Converted["_cornerfix"].Parent = Converted["_topbar"]
+
+Converted["_outline"].AnchorPoint = Vector2.new(0, 1)
+Converted["_outline"].BackgroundColor3 = Color3.fromRGB(26, 30, 35)
+Converted["_outline"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_outline"].BorderSizePixel = 0
+Converted["_outline"].Position = UDim2.new(0, 0, 1, 1)
+Converted["_outline"].Size = UDim2.new(1, 0, 0, 1)
+Converted["_outline"].Name = "outline"
+Converted["_outline"].Parent = Converted["_topbar"]
+
+Converted["_container"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_container"].BackgroundTransparency = 1
+Converted["_container"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_container"].BorderSizePixel = 0
+Converted["_container"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_container"].Name = "container"
+Converted["_container"].Parent = Converted["_topbar"]
+
+Converted["_UIPadding"].PaddingBottom = UDim.new(0, 9)
+Converted["_UIPadding"].PaddingLeft = UDim.new(0, 13)
+Converted["_UIPadding"].PaddingRight = UDim.new(0, 13)
+Converted["_UIPadding"].PaddingTop = UDim.new(0, 9)
+Converted["_UIPadding"].Parent = Converted["_container"]
+
+Converted["_UIListLayout"].Padding = UDim.new(0, 7)
+Converted["_UIListLayout"].FillDirection = Enum.FillDirection.Horizontal
+Converted["_UIListLayout"].SortOrder = Enum.SortOrder.LayoutOrder
+Converted["_UIListLayout"].VerticalAlignment = Enum.VerticalAlignment.Center
+Converted["_UIListLayout"].Parent = Converted["_container"]
+
+Converted["_title"].Font = Enum.Font.GothamBold
+Converted["_title"].Text = "minihook"
+Converted["_title"].TextColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_title"].TextSize = 15
+Converted["_title"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_title"].BackgroundTransparency = 1
+Converted["_title"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_title"].BorderSizePixel = 0
+Converted["_title"].Size = UDim2.new(0, 82, 0, 18)
+Converted["_title"].Name = "title"
+Converted["_title"].Parent = Converted["_container"]
+
+Converted["_versionframe"].BackgroundColor3 = Color3.fromRGB(16, 18, 21)
+Converted["_versionframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_versionframe"].BorderSizePixel = 0
+Converted["_versionframe"].Size = UDim2.new(0, 65, 0, 17)
+Converted["_versionframe"].Name = "versionframe"
+Converted["_versionframe"].Parent = Converted["_container"]
+
+Converted["_UICorner2"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner2"].Parent = Converted["_versionframe"]
+
+Converted["_versiontext"].Font = Enum.Font.GothamBold
+Converted["_versiontext"].Text = "Premuim"
+Converted["_versiontext"].TextColor3 = Color3.fromRGB(145, 145, 145)
+Converted["_versiontext"].TextSize = 10
+Converted["_versiontext"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_versiontext"].BackgroundTransparency = 2
+Converted["_versiontext"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_versiontext"].BorderSizePixel = 0
+Converted["_versiontext"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_versiontext"].Name = "versiontext"
+Converted["_versiontext"].Parent = Converted["_versionframe"]
+
+Converted["_UIStroke1"].Color = Color3.fromRGB(27, 31, 36)
+Converted["_UIStroke1"].Parent = Converted["_versionframe"]
+
+Converted["_split"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_split"].BackgroundTransparency = 1
+Converted["_split"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_split"].BorderSizePixel = 0
+Converted["_split"].LayoutOrder = 1
+Converted["_split"].Size = UDim2.new(0, 260, 0, 10)
+Converted["_split"].Name = "split"
+Converted["_split"].Parent = Converted["_container"]
+
+Converted["_close"].Image = "rbxassetid://95254386254996"
+Converted["_close"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_close"].BackgroundTransparency = 1
+Converted["_close"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_close"].BorderSizePixel = 0
+Converted["_close"].LayoutOrder = 2
+Converted["_close"].Size = UDim2.new(0, 20, 0, 20)
+Converted["_close"].ZIndex = 1000
+Converted["_close"].Name = "close"
+Converted["_close"].Parent = Converted["_container"]
+
+Converted["_TextButton"].Font = Enum.Font.SourceSans
+Converted["_TextButton"].Text = ""
+Converted["_TextButton"].TextColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_TextButton"].TextSize = 14
+Converted["_TextButton"].AnchorPoint = Vector2.new(0.5, 0.5)
+Converted["_TextButton"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_TextButton"].BackgroundTransparency = 1
+Converted["_TextButton"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_TextButton"].BorderSizePixel = 0
+Converted["_TextButton"].Position = UDim2.new(0.5, 0, 0.5, 0)
+Converted["_TextButton"].Size = UDim2.new(1, 16, 1, 16)
+Converted["_TextButton"].ZIndex = 1000
+Converted["_TextButton"].Parent = Converted["_close"]
+
+Converted["_holder"].AnchorPoint = Vector2.new(0, 1)
+Converted["_holder"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_holder"].BackgroundTransparency = 1
+Converted["_holder"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_holder"].BorderSizePixel = 0
+Converted["_holder"].Position = UDim2.new(0, 0, 1, 0)
+Converted["_holder"].Size = UDim2.new(1, 0, 0, 235)
+Converted["_holder"].Name = "holder"
+Converted["_holder"].Parent = Converted["_background"]
+
+Converted["_tabframe"].BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+Converted["_tabframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_tabframe"].BorderSizePixel = 0
+Converted["_tabframe"].Size = UDim2.new(1, 0, 0, 35)
+Converted["_tabframe"].Name = "tabframe"
+Converted["_tabframe"].Parent = Converted["_holder"]
+
+Converted["_UICorner7"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner7"].Parent = Converted["_tabframe"]
+
+Converted["_UIStroke7"].Color = Color3.fromRGB(26, 30, 34)
+Converted["_UIStroke7"].Parent = Converted["_tabframe"]
+
+Converted["_UIListLayout2"].Padding = UDim.new(0, 5)
+Converted["_UIListLayout2"].FillDirection = Enum.FillDirection.Horizontal
+Converted["_UIListLayout2"].HorizontalAlignment = Enum.HorizontalAlignment.Center
+Converted["_UIListLayout2"].SortOrder = Enum.SortOrder.LayoutOrder
+Converted["_UIListLayout2"].VerticalAlignment = Enum.VerticalAlignment.Center
+Converted["_UIListLayout2"].Parent = Converted["_tabframe"]
+
+Converted["_textinputtab"].Font = Enum.Font.GothamBold
+Converted["_textinputtab"].Text = "Text Input"
+Converted["_textinputtab"].TextColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_textinputtab"].TextSize = 12
+Converted["_textinputtab"].BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+Converted["_textinputtab"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_textinputtab"].BorderSizePixel = 0
+Converted["_textinputtab"].Size = UDim2.new(0, 100, 0, 25)
+Converted["_textinputtab"].Name = "textinputtab"
+Converted["_textinputtab"].Parent = Converted["_tabframe"]
+
+Converted["_UICorner10"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner10"].Parent = Converted["_textinputtab"]
+
+Converted["_UIStroke10"].Color = Color3.fromRGB(26, 30, 35)
+Converted["_UIStroke10"].Parent = Converted["_textinputtab"]
+
+Converted["_filebrowsertab"].Font = Enum.Font.GothamBold
+Converted["_filebrowsertab"].Text = "File Browser"
+Converted["_filebrowsertab"].TextColor3 = Color3.fromRGB(135, 135, 135)
+Converted["_filebrowsertab"].TextSize = 12
+Converted["_filebrowsertab"].BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+Converted["_filebrowsertab"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_filebrowsertab"].BorderSizePixel = 0
+Converted["_filebrowsertab"].Size = UDim2.new(0, 100, 0, 25)
+Converted["_filebrowsertab"].Name = "filebrowsertab"
+Converted["_filebrowsertab"].Parent = Converted["_tabframe"]
+
+Converted["_UICorner11"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner11"].Parent = Converted["_filebrowsertab"]
+
+Converted["_UIStroke11"].Color = Color3.fromRGB(26, 30, 35)
+Converted["_UIStroke11"].Parent = Converted["_filebrowsertab"]
+
+-- FIRST TAB - KEEP ORIGINAL DESIGN
+Converted["_textcontainer"].BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+Converted["_textcontainer"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_textcontainer"].BorderSizePixel = 0
+Converted["_textcontainer"].Position = UDim2.new(0, 0, 0, 35)
+Converted["_textcontainer"].Size = UDim2.new(1, 0, 1, -35)
+Converted["_textcontainer"].Name = "textcontainer"
+Converted["_textcontainer"].Parent = Converted["_holder"]
+Converted["_textcontainer"].Visible = true
+
+Converted["_UIStroke2"].Color = Color3.fromRGB(26, 30, 34)
+Converted["_UIStroke2"].Parent = Converted["_textcontainer"]
+
+Converted["_UICorner3"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner3"].Parent = Converted["_textcontainer"]
+
+Converted["_UIListLayout1"].Padding = UDim.new(0, 10)
+Converted["_UIListLayout1"].HorizontalAlignment = Enum.HorizontalAlignment.Center
+Converted["_UIListLayout1"].SortOrder = Enum.SortOrder.LayoutOrder
+Converted["_UIListLayout1"].VerticalAlignment = Enum.VerticalAlignment.Center
+Converted["_UIListLayout1"].Parent = Converted["_textcontainer"]
+
+Converted["_textboxframe"].BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+Converted["_textboxframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_textboxframe"].BorderSizePixel = 0
+Converted["_textboxframe"].Size = UDim2.new(1, 0, 0, 110)
+Converted["_textboxframe"].Name = "textboxframe"
+Converted["_textboxframe"].Parent = Converted["_textcontainer"]
+
+Converted["_TextBox"].Font = Enum.Font.RobotoMono
+Converted["_TextBox"].PlaceholderColor3 = Color3.fromRGB(134, 134, 134)
+Converted["_TextBox"].PlaceholderText = "paste json data OR temporary link here.."
+Converted["_TextBox"].Text = ""
+Converted["_TextBox"].TextColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_TextBox"].TextSize = 12
+Converted["_TextBox"].TextWrapped = false
+Converted["_TextBox"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_TextBox"].BackgroundTransparency = 1
+Converted["_TextBox"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_TextBox"].BorderSizePixel = 0
+Converted["_TextBox"].ClipsDescendants = true
+Converted["_TextBox"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_TextBox"].ZIndex = 500
+Converted["_TextBox"].MultiLine = true
+Converted["_TextBox"].ClearTextOnFocus = true
+Converted["_TextBox"].Parent = Converted["_textboxframe"]
+
+Converted["_UICorner4"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner4"].Parent = Converted["_textboxframe"]
+
+Converted["_UIPadding1"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding1"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding1"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding1"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding1"].Parent = Converted["_textboxframe"]
+
+Converted["_UIStroke3"].Color = Color3.fromRGB(34, 39, 44)
+Converted["_UIStroke3"].Parent = Converted["_textboxframe"]
+
+Converted["_UIPadding2"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding2"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding2"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding2"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding2"].Parent = Converted["_textcontainer"]
+
+Converted["_buttonframe"].BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+Converted["_buttonframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_buttonframe"].BorderSizePixel = 0
+Converted["_buttonframe"].Size = UDim2.new(1, 0, 0, 48)
+Converted["_buttonframe"].Name = "buttonframe"
+Converted["_buttonframe"].Parent = Converted["_textcontainer"]
+
+Converted["_UICorner5"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner5"].Parent = Converted["_buttonframe"]
+
+Converted["_UIStroke4"].Color = Color3.fromRGB(34, 39, 44)
+Converted["_UIStroke4"].Parent = Converted["_buttonframe"]
+
+Converted["_TextButton1"].Font = Enum.Font.GothamBold
+Converted["_TextButton1"].Text = "load image"
+Converted["_TextButton1"].TextColor3 = Color3.fromRGB(135, 135, 135)
+Converted["_TextButton1"].TextSize = 14
+Converted["_TextButton1"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_TextButton1"].BackgroundTransparency = 1
+Converted["_TextButton1"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_TextButton1"].BorderSizePixel = 0
+Converted["_TextButton1"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_TextButton1"].ZIndex = 500
+Converted["_TextButton1"].Parent = Converted["_buttonframe"]
+
+-- SECOND TAB - COPY OF FIRST TAB STRUCTURE
+Converted["_filecontainer"].BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+Converted["_filecontainer"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_filecontainer"].BorderSizePixel = 0
+Converted["_filecontainer"].Position = UDim2.new(0, 0, 0, 35)
+Converted["_filecontainer"].Size = UDim2.new(1, 0, 1, -35)
+Converted["_filecontainer"].Name = "filecontainer"
+Converted["_filecontainer"].Parent = Converted["_holder"]
+Converted["_filecontainer"].Visible = false
+
+Converted["_UIStroke8"].Color = Color3.fromRGB(26, 30, 34)
+Converted["_UIStroke8"].Parent = Converted["_filecontainer"]
+
+Converted["_UICorner8"].CornerRadius = UDim.new(0, 4)
+Converted["_UICorner8"].Parent = Converted["_filecontainer"]
+
+Converted["_UIListLayout9"].Padding = UDim.new(0, 10)
+Converted["_UIListLayout9"].HorizontalAlignment = Enum.HorizontalAlignment.Center
+Converted["_UIListLayout9"].SortOrder = Enum.SortOrder.LayoutOrder
+Converted["_UIListLayout9"].VerticalAlignment = Enum.VerticalAlignment.Center
+Converted["_UIListLayout9"].Parent = Converted["_filecontainer"]
+
+-- ScrollingFrame container (copy of textboxframe)
+Converted["_filescrollframe"].BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+Converted["_filescrollframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_filescrollframe"].BorderSizePixel = 0
+Converted["_filescrollframe"].Size = UDim2.new(1, 0, 0, 110)
+Converted["_filescrollframe"].Name = "filescrollframe"
+Converted["_filescrollframe"].Parent = Converted["_filecontainer"]
+
+Converted["_UICorner12"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner12"].Parent = Converted["_filescrollframe"]
+
+Converted["_UIPadding9"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding9"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding9"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding9"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding9"].Parent = Converted["_filescrollframe"]
+
+Converted["_UIStroke12"].Color = Color3.fromRGB(34, 39, 44)
+Converted["_UIStroke12"].Parent = Converted["_filescrollframe"]
+
+-- ScrollingFrame (replaces TextBox)
+Converted["_filescroll"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_filescroll"].BackgroundTransparency = 1
+Converted["_filescroll"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_filescroll"].BorderSizePixel = 0
+Converted["_filescroll"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_filescroll"].CanvasSize = UDim2.new(0, 0, 0, 0)
+Converted["_filescroll"].ScrollBarThickness = 8
+Converted["_filescroll"].ScrollBarImageColor3 = Color3.fromRGB(135, 135, 135)
+Converted["_filescroll"].Name = "filescroll"
+Converted["_filescroll"].Parent = Converted["_filescrollframe"]
+
+Converted["_UIListLayout3"].Padding = UDim.new(0, 5)
+Converted["_UIListLayout3"].HorizontalAlignment = Enum.HorizontalAlignment.Center
+Converted["_UIListLayout3"].SortOrder = Enum.SortOrder.LayoutOrder
+Converted["_UIListLayout3"].Parent = Converted["_filescroll"]
+
+Converted["_UIPadding4"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding4"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding4"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding4"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding4"].Parent = Converted["_filescroll"]
+
+Converted["_UIPadding10"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding10"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding10"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding10"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding10"].Parent = Converted["_filecontainer"]
+
+-- Button frame (copy of original buttonframe)
+Converted["_refreshframe"].BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+Converted["_refreshframe"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_refreshframe"].BorderSizePixel = 0
+Converted["_refreshframe"].Size = UDim2.new(1, 0, 0, 48)
+Converted["_refreshframe"].Name = "refreshframe"
+Converted["_refreshframe"].Parent = Converted["_filecontainer"]
+
+Converted["_UICorner13"].CornerRadius = UDim.new(0, 3)
+Converted["_UICorner13"].Parent = Converted["_refreshframe"]
+
+Converted["_UIStroke13"].Color = Color3.fromRGB(34, 39, 44)
+Converted["_UIStroke13"].Parent = Converted["_refreshframe"]
+
+Converted["_refreshbutton"].Font = Enum.Font.GothamBold
+Converted["_refreshbutton"].Text = "refresh list"
+Converted["_refreshbutton"].TextColor3 = Color3.fromRGB(135, 135, 135)
+Converted["_refreshbutton"].TextSize = 14
+Converted["_refreshbutton"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_refreshbutton"].BackgroundTransparency = 1
+Converted["_refreshbutton"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_refreshbutton"].BorderSizePixel = 0
+Converted["_refreshbutton"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_refreshbutton"].ZIndex = 500
+Converted["_refreshbutton"].Parent = Converted["_refreshframe"]
+
+Converted["_UIPadding3"].PaddingBottom = UDim.new(0, 8)
+Converted["_UIPadding3"].PaddingLeft = UDim.new(0, 8)
+Converted["_UIPadding3"].PaddingRight = UDim.new(0, 8)
+Converted["_UIPadding3"].PaddingTop = UDim.new(0, 8)
+Converted["_UIPadding3"].Parent = Converted["_holder"]
+
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+Converted["_UIScale"].Scale = isMobile and 0.7 or 1
+Converted["_UIScale"].Parent = Converted["_background"]
+
+Converted["_credits"].Font = Enum.Font.GothamBold
+Converted["_credits"].Text = "@0o4o."
+Converted["_credits"].TextColor3 = Color3.fromRGB(175, 175, 175)
+Converted["_credits"].TextSize = 10
+Converted["_credits"].AnchorPoint = Vector2.new(0.5, 1)
+Converted["_credits"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_credits"].BackgroundTransparency = 1
+Converted["_credits"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_credits"].BorderSizePixel = 0
+Converted["_credits"].Position = UDim2.new(0.5, 0, 1, 35)
+Converted["_credits"].Size = UDim2.new(0, 200, 0, 50)
+Converted["_credits"].Name = "credits"
+Converted["_credits"].Parent = Converted["_background"]
+
+Converted["_UIStroke5"].Parent = Converted["_credits"]
+
+Converted["_openbutton"].AnchorPoint = Vector2.new(0.5, 0)
+Converted["_openbutton"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_openbutton"].BackgroundTransparency = 0.2
+Converted["_openbutton"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_openbutton"].BorderSizePixel = 0
+Converted["_openbutton"].Position = UDim2.new(0.5, 0, 0, 5)
+Converted["_openbutton"].Size = UDim2.new(0, 100, 0, 30)
+Converted["_openbutton"].Name = "openbutton"
+Converted["_openbutton"].Parent = Converted["_minihook"]
+Converted["_openbutton"].Visible = false
+
+Converted["_UICorner6"].CornerRadius = UDim.new(1, 0)
+Converted["_UICorner6"].Parent = Converted["_openbutton"]
+
+Converted["_UIStroke6"].Color = Color3.fromRGB(26, 30, 35)
+Converted["_UIStroke6"].Parent = Converted["_openbutton"]
+
+Converted["_TextButton2"].Font = Enum.Font.GothamBold
+Converted["_TextButton2"].Text = "Click To Open"
+Converted["_TextButton2"].TextColor3 = Color3.fromRGB(134, 134, 134)
+Converted["_TextButton2"].TextSize = 14
+Converted["_TextButton2"].BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+Converted["_TextButton2"].BackgroundTransparency = 1
+Converted["_TextButton2"].BorderColor3 = Color3.fromRGB(0, 0, 0)
+Converted["_TextButton2"].BorderSizePixel = 0
+Converted["_TextButton2"].Size = UDim2.new(1, 0, 1, 0)
+Converted["_TextButton2"].ZIndex = 500
+Converted["_TextButton2"].Parent = Converted["_openbutton"]
+
+Converted["_UIGradient3"].Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 25, 29)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 21, 24))
+}
+Converted["_UIGradient3"].Rotation = 90
+Converted["_UIGradient3"].Parent = Converted["_openbutton"]
+
+local isUIOpen = true
+local openButtonOriginalPos = Converted["_openbutton"].Position
+local currentTab = "textinput"
+
+-- Animação inicial de entrada
+task.spawn(function()
+    task.wait(0.1)
+    Converted["_background"].BackgroundTransparency = 1
+    Converted["_background"].Size = UDim2.new(0, 0, 0, 0)
+    spr.target(Converted["_background"], 0.6, 5, {
+        BackgroundTransparency = 0,
+        Size = UDim2.new(0, 475, 0, 280)
+    })
+end)
+
+-- Sistema de Drag corrigido
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+local function makeDraggable(frame, dragHandle)
+    dragHandle = dragHandle or frame
+    
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            
+            -- Feedback visual ao começar a arrastar
+            spr.target(frame, 0.2, 10, {
+                Size = frame.Size + UDim2.new(0, 2, 0, 2)
+            })
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            local screenSize = workspace.CurrentCamera.ViewportSize
+            local frameSize = frame.AbsoluteSize
+            
+            -- Calcular nova posição mantendo o AnchorPoint
+            local newOffsetX = startPos.X.Offset + delta.X
+            local newOffsetY = startPos.Y.Offset + delta.Y
+            
+            -- Limitar dentro da tela (considerando AnchorPoint 0.5, 0.5)
+            local minX = -screenSize.X/2 + frameSize.X/2
+            local maxX = screenSize.X/2 - frameSize.X/2
+            local minY = -screenSize.Y/2 + frameSize.Y/2
+            local maxY = screenSize.Y/2 - frameSize.Y/2
+            
+            newOffsetX = math.clamp(newOffsetX, minX, maxX)
+            newOffsetY = math.clamp(newOffsetY, minY, maxY)
+            
+            -- Atualizar posição diretamente (sem animação durante o drag)
+            frame.Position = UDim2.new(0.5, newOffsetX, 0.5, newOffsetY)
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if dragging then
+                dragging = false
+                
+                -- Restaurar tamanho original
+                spr.target(frame, 0.2, 10, {
+                    Size = UDim2.new(0, 475, 0, 280)
+                })
+            end
+        end
+    end)
+end
+
+-- Aplicar drag no topbar
+makeDraggable(Converted["_background"], Converted["_topbar"])
+
+-- Melhorias visuais: Hover effects nos botões
+local function addHoverEffect(button, originalColor, hoverColor)
+    local originalTextColor = button.TextColor3
+    local hoverTextColor = hoverColor or Color3.fromRGB(255, 255, 255)
+    
+    button.MouseEnter:Connect(function()
+        spr.target(button, 0.3, 8, {
+            TextColor3 = hoverTextColor,
+            BackgroundTransparency = button.BackgroundTransparency == 1 and 0.9 or button.BackgroundTransparency - 0.1
+        })
+    end)
+    
+    button.MouseLeave:Connect(function()
+        spr.target(button, 0.3, 8, {
+            TextColor3 = originalTextColor,
+            BackgroundTransparency = button.BackgroundTransparency
+        })
+    end)
+end
+
+-- Aplicar hover effects
+addHoverEffect(Converted["_TextButton1"], Color3.fromRGB(135, 135, 135))
+addHoverEffect(Converted["_refreshbutton"], Color3.fromRGB(135, 135, 135))
+addHoverEffect(Converted["_textinputtab"], Color3.fromRGB(255, 255, 255))
+addHoverEffect(Converted["_filebrowsertab"], Color3.fromRGB(135, 135, 135))
+
+-- Animação inicial de entrada (já aplicada no openUI)
+
+-- Melhorar animação de troca de tabs
+function switchToTextInput()
+    if currentTab == "textinput" then return end
+    currentTab = "textinput"
+    
+    spr.target(Converted["_textinputtab"], 0.4, 6, {
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+    })
+    spr.target(Converted["_filebrowsertab"], 0.4, 6, {
+        TextColor3 = Color3.fromRGB(135, 135, 135),
+        BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+    })
+    
+    Converted["_filecontainer"].Visible = false
+    Converted["_textcontainer"].Visible = true
+    Converted["_textcontainer"].BackgroundTransparency = 1
+    spr.target(Converted["_textcontainer"], 0.3, 7, {
+        BackgroundTransparency = 0
+    })
+end
+
+function switchToFileBrowser()
+    if currentTab == "filebrowser" then return end
+    currentTab = "filebrowser"
+    
+    spr.target(Converted["_filebrowsertab"], 0.4, 6, {
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+    })
+    spr.target(Converted["_textinputtab"], 0.4, 6, {
+        TextColor3 = Color3.fromRGB(135, 135, 135),
+        BackgroundColor3 = Color3.fromRGB(22, 25, 29)
+    })
+    
+    Converted["_textcontainer"].Visible = false
+    Converted["_filecontainer"].Visible = true
+    Converted["_filecontainer"].BackgroundTransparency = 1
+    spr.target(Converted["_filecontainer"], 0.3, 7, {
+        BackgroundTransparency = 0
+    })
+    
+    refreshFileList()
+end
+
+-- Função para decodificar Base64
+local function decodeBase64(data)
+    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    data = string.gsub(data, '[^'..b..'=]', '')
+    return (data:gsub('.', function(x)
+        if (x == '=') then return '' end
+        local r,f='',(b:find(x)-1)
+        for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+        return r;
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if (#x ~= 8) then return '' end
+        local c=0
+        for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+        return string.char(c)
+    end))
+end
+
+-- Função para descomprimir LZ-String (usa algoritmo LZW)
+local function decompressLZString(data)
+    -- Decodificar Base64 primeiro
+    local decoded = decodeBase64(data)
+    if not decoded or #decoded == 0 then
+        return nil
+    end
+    
+    -- LZ-String usa compressão LZW com leitura bit a bit
+    -- Implementação simplificada que funciona para a maioria dos casos
+    local function readBits(str, bitPos, numBits)
+        local result = 0
+        for i = 0, numBits - 1 do
+            local bytePos = math.floor((bitPos + i) / 8) + 1
+            local bitInByte = (bitPos + i) % 8
+            if bytePos <= #str then
+                local byte = str:byte(bytePos)
+                if (byte & (1 << bitInByte)) ~= 0 then
+                    result = result | (1 << i)
+                end
+            end
+        end
+        return result
+    end
+    
+    -- Inicializar dicionário
+    local dictSize = 256
+    local dict = {}
+    for i = 0, 255 do
+        dict[i] = string.char(i)
+    end
+    
+    local bitPos = 0
+    local result = ""
+    local w = ""
+    
+    while bitPos < #decoded * 8 do
+        local k = readBits(decoded, bitPos, 16)
+        bitPos = bitPos + 16
+        
+        local entry
+        if dict[k] then
+            entry = dict[k]
+        elseif k == dictSize then
+            entry = w .. w:sub(1, 1)
+        else
+            break
+        end
+        
+        result = result .. entry
+        
+        if w ~= "" then
+            dict[dictSize] = w .. entry:sub(1, 1)
+            dictSize = dictSize + 1
+        end
+        
+        w = entry
+    end
+    
+    return result
+end
+
+function processImageData(jsonString)
+    -- Detectar tipo de codificação
+    local isCompressed = false
+    local isBase64 = false
+    
+    -- LZ-String comprimido geralmente é menor e tem padrão específico
+    if jsonString:match("^[A-Za-z0-9+/_-]+$") and #jsonString > 50 and not jsonString:match("^{") then
+        -- Verificar se parece ser LZ-String (geralmente mais curto que Base64 equivalente)
+        if jsonString:match("^[A-Za-z0-9+/_-]+$") and not jsonString:match("=$") then
+            isCompressed = true
+        else
+            isBase64 = true
+        end
+    end
+    
+    -- Se for LZ-String comprimido, descomprimir primeiro
+    if isCompressed then
+        local success, decoded = pcall(function()
+            -- Tentar descomprimir LZ-String
+            local result = decompressLZString(jsonString)
+            -- Se a descompressão não funcionar bem, tentar como Base64 normal
+            if not result or #result < 10 then
+                return decodeBase64(jsonString)
+            end
+            return result
+        end)
+        if success and decoded then
+            jsonString = decoded
+        else
+            -- Fallback: tentar como Base64 normal
+            local success2, decoded2 = pcall(function()
+                return decodeBase64(jsonString)
+            end)
+            if success2 and decoded2 then
+                jsonString = decoded2
+            else
+                return false, "Failed to decompress: " .. tostring(decoded)
+            end
+        end
+    -- Se for Base64, decodificar
+    elseif isBase64 then
+        local success, decoded = pcall(function()
+            return decodeBase64(jsonString)
+        end)
+        if success and decoded then
+            jsonString = decoded
+        else
+            return false, "Failed to decode Base64: " .. tostring(decoded)
+        end
+    end
+    
+    local success, DATA = pcall(function()
+        return HttpService:JSONDecode(jsonString)
+    end)
+    
+    if not success then
+        return false, "Invalid JSON format or Base64"
+    end
+    
+    if not DATA.Width or not DATA.Height or not DATA.Pixels then
+        return false, "Missing required fields (Width, Height, Pixels)"
+    end
+    
+    local CanvasDraw = require(game.ReplicatedFirst.CanvasDraw)
+    local frame = game.Players.LocalPlayer.PlayerGui.MainGameUI.CanvasFrame.WhiteFrame:Clone()
+    local canvas = CanvasDraw.new(frame, Vector2.new(DATA.Width, DATA.Height))
+    local pixelcoords = Vector2.new(0, 1)
+    local count = 0
+    
+    for _,pixel in DATA.Pixels do 
+        pixelcoords = pixelcoords + Vector2.new(1, 0)
+        if pixelcoords.X > DATA.Width then
+            pixelcoords = Vector2.new(1, pixelcoords.Y + 1)
+        end
+        canvas:DrawLine(pixelcoords, pixelcoords, Color3.fromRGB(pixel[1], pixel[2], pixel[3]), 0)
+        count = count + 1
+        if count % 5000 == 0 then
+            task.wait()
+        end
+    end
+    
+    canvas:Render()
+    local data = canvas:CreateImageDataFromCanvas()
+    local comp = CanvasDraw.CompressImageData(data)
+    game:GetService("Players").LocalPlayer.PlayerGui.MainGameUI.MainGuiScript.LoadSlot:Fire({
+        comp
+    })
+    
+    return true, "Image loaded successfully!"
+end
+
+-- Configuração da API (mude para sua URL)
+local API_BASE_URL = "https://sua-api.com/api" -- Mude para sua URL da API
+
+function isURL(text)
+    return text:match("^https?://") ~= nil
+end
+
+function isAPICode(text)
+    -- Código da API: 16 caracteres hexadecimais
+    return text:match("^[a-fA-F0-9]{16}$") ~= nil
+end
+
+function fetchJSONFromAPI(code)
+    local success, response = pcall(function()
+        return HttpService:GetAsync(API_BASE_URL .. "/get-image/" .. code)
+    end)
+    
+    if success then
+        return true, response
+    else
+        return false, "Failed to fetch from API"
+    end
+end
+
+function fetchJSONFromURL(url)
+    local success, response = pcall(function()
+        return HttpService:GetAsync(url)
+    end)
+    
+    if success then
+        return true, response
+    else
+        return false, "Failed to fetch data from URL"
+    end
+end
+
+-- Função para processar URL de imagem via API
+function processImageURL(imageUrl)
+    local success, response = pcall(function()
+        -- Enviar URL da imagem para API processar
+        return HttpService:PostAsync(
+            API_BASE_URL .. "/process-image",
+            HttpService:JSONEncode({imageUrl = imageUrl}),
+            Enum.HttpContentType.ApplicationJson
+        )
+    end)
+    
+    if success then
+        local result = HttpService:JSONDecode(response)
+        if result.success then
+            -- Buscar o JSON processado usando o código retornado
+            local success2, jsonData = fetchJSONFromAPI(result.code)
+            if success2 then
+                return true, jsonData
+            else
+                return false, "Failed to fetch processed image"
+            end
+        else
+            return false, result.error or "API processing failed"
+        end
+    else
+        return false, "Failed to send image to API: " .. tostring(response)
+    end
+end
+
+-- Verificar se URL é de imagem
+function isImageURL(url)
+    local imageExtensions = {"%.png", "%.jpg", "%.jpeg", "%.gif", "%.webp", "%.bmp"}
+    local lowerUrl = string.lower(url)
+    for _, ext in ipairs(imageExtensions) do
+        if lowerUrl:match(ext) then
+            return true
+        end
+    end
+    -- Verificar se tem parâmetros de imagem (como Discord CDN)
+    if lowerUrl:match("image") or lowerUrl:match("attachments") or lowerUrl:match("cdn") then
+        return true
+    end
+    return false
+end
+
+-- File buttons styled like the load image button
+function createFileButton(filename)
+    local fileButtonFrame = Instance.new("Frame")
+    local UICorner = Instance.new("UICorner")
+    local UIStroke = Instance.new("UIStroke")
+    local fileButton = Instance.new("TextButton")
+    
+    local displayName = filename:match("minihook\KATEX_INLINE_OPEN.+)") or filename:match("minihook/(.+)") or filename
+    
+    -- Frame styled like buttonframe
+    fileButtonFrame.BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+    fileButtonFrame.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    fileButtonFrame.BorderSizePixel = 0
+    fileButtonFrame.Size = UDim2.new(1, -16, 0, 35)
+    fileButtonFrame.Name = filename .. "_frame"
+    fileButtonFrame.Parent = Converted["_filescroll"]
+    
+    UICorner.CornerRadius = UDim.new(0, 3)
+    UICorner.Parent = fileButtonFrame
+    
+    UIStroke.Color = Color3.fromRGB(34, 39, 44)
+    UIStroke.Parent = fileButtonFrame
+    
+    -- Button styled like TextButton1
+    fileButton.Font = Enum.Font.GothamBold
+    fileButton.Text = displayName
+    fileButton.TextColor3 = Color3.fromRGB(135, 135, 135)
+    fileButton.TextSize = 14
+    fileButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    fileButton.BackgroundTransparency = 1
+    fileButton.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    fileButton.BorderSizePixel = 0
+    fileButton.Size = UDim2.new(1, 0, 1, 0)
+    fileButton.ZIndex = 500
+    fileButton.Name = filename
+    fileButton.Parent = fileButtonFrame
+    
+    -- Hover effect no botão de arquivo
+    fileButton.MouseEnter:Connect(function()
+        spr.target(fileButtonFrame, 0.2, 8, {
+            BackgroundColor3 = Color3.fromRGB(40, 45, 50)
+        })
+        spr.target(fileButton, 0.2, 8, {
+            TextColor3 = Color3.fromRGB(200, 200, 200)
+        })
+    end)
+    
+    fileButton.MouseLeave:Connect(function()
+        spr.target(fileButtonFrame, 0.2, 8, {
+            BackgroundColor3 = Color3.fromRGB(34, 39, 44)
+        })
+        spr.target(fileButton, 0.2, 8, {
+            TextColor3 = Color3.fromRGB(135, 135, 135)
+        })
+    end)
+    
+    fileButton.MouseButton1Click:Connect(function()
+        local originalText = fileButton.Text
+        local originalColor = fileButton.TextColor3
+        
+        -- Animação de clique
+        spr.target(fileButtonFrame, 0.1, 15, {
+            Size = fileButtonFrame.Size - UDim2.new(0, 4, 0, 2)
+        })
+        
+        task.wait(0.1)
+        
+        spr.target(fileButtonFrame, 0.1, 15, {
+            Size = UDim2.new(1, -16, 0, 35)
+        })
+        
+        fileButton.Text = "loading..."
+        spr.target(fileButton, 0.3, 6, {
+            TextColor3 = Color3.fromRGB(255, 255, 0)
+        })
+        
+        spawn(function()
+            local jsonData = readFileContent(displayName)
+            local success, result = processImageData(jsonData)
+            
+            task.wait(3)
+            fileButton.Text = originalText
+            spr.target(fileButton, 0.3, 6, {
+                TextColor3 = originalColor
+            })
+        end)
+    end)
+    
+    return fileButtonFrame
+end
+
+function refreshFileList()
+    for _, child in pairs(Converted["_filescroll"]:GetChildren()) do
+        if child:IsA("Frame") and child.Name:find("_frame") then
+            child:Destroy()
+        end
+    end
+    
+    local files = getFilesInFolder()
+    local validFiles = {}
+    
+    for _, filename in pairs(files) do
+        if filename:match("%.json$") or filename:match("%.txt$") then
+            table.insert(validFiles, filename)
+        end
+    end
+    
+    for _, filename in pairs(validFiles) do
+        createFileButton(filename)
+    end
+    
+    Converted["_filescroll"].CanvasSize = UDim2.new(0, 0, 0, #validFiles * 40 + 16)
+end
+
+local function openUI()
+    if isUIOpen then return end
+    isUIOpen = true
+    
+    Converted["_background"].Visible = true
+    Converted["_background"].BackgroundTransparency = 1
+    Converted["_background"].Size = UDim2.new(0, 0, 0, 0)
+    
+    PopUIFrame(Converted["_background"])
+    
+    spr.target(Converted["_background"], 0.6, 5, {
+        BackgroundTransparency = 0,
+        Size = UDim2.new(0, 475, 0, 280)
+    })
+    
+    spr.target(Converted["_openbutton"], 0.6, 3, {
+        Position = UDim2.new(0.5, 0, 0, -50),
+        BackgroundTransparency = 1
+    })
+    
+    task.wait(0.5)
+    Converted["_openbutton"].Visible = false
+end
+
+local function closeUI()
+    if not isUIOpen then return end
+    isUIOpen = false
+    
+    spr.target(Converted["_background"], 0.5, 6, {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 0, 0, 0)
+    })
+    
+    ShrinkUIFrame(Converted["_background"], true)
+    
+    task.wait(0.3)
+    Converted["_openbutton"].Visible = true
+    Converted["_openbutton"].BackgroundTransparency = 0.2
+    spr.target(Converted["_openbutton"], 0.6, 3, {
+        Position = openButtonOriginalPos
+    })
+end
+
+Converted["_TextButton2"].MouseButton1Click:Connect(openUI)
+Converted["_TextButton"].MouseButton1Click:Connect(closeUI)
+
+Converted["_textinputtab"].MouseButton1Click:Connect(switchToTextInput)
+Converted["_filebrowsertab"].MouseButton1Click:Connect(switchToFileBrowser)
+
+Converted["_refreshbutton"].MouseButton1Click:Connect(refreshFileList)
+
+Converted["_TextButton1"].MouseButton1Click:Connect(function()
+    local input = Converted["_TextBox"].Text:gsub("^%s*(.-)%s*$", "%1")
+    
+    if input == "" or input == "paste json data OR temporary link here.." then
+        Converted["_TextBox"].PlaceholderText = "paste json data OR temporary link here.."
+        return
+    end
+    
+    local originalText = Converted["_TextButton1"].Text
+    local originalColor = Converted["_TextButton1"].TextColor3
+    local buttonFrame = Converted["_buttonframe"]
+    
+    -- Animação de clique
+    spr.target(buttonFrame, 0.1, 15, {
+        Size = buttonFrame.Size - UDim2.new(0, 4, 0, 4)
+    })
+    
+    task.wait(0.1)
+    
+    spr.target(buttonFrame, 0.1, 15, {
+        Size = UDim2.new(1, 0, 0, 48)
+    })
+    
+    Converted["_TextButton1"].Text = "loading..."
+    spr.target(Converted["_TextButton1"], 0.3, 6, {
+        TextColor3 = Color3.fromRGB(255, 255, 0)
+    })
+    
+    spawn(function()
+        local jsonData = input
+        
+        -- Verificar tipo de input e processar
+        if isAPICode(input) then
+            -- É código da API - buscar JSON diretamente
+            local success, result = fetchJSONFromAPI(input)
+            
+            if success then
+                jsonData = result
+            else
+                Converted["_TextButton1"].Text = "API error"
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = Color3.fromRGB(255, 0, 0)
+                })
+                task.wait(2)
+                Converted["_TextButton1"].Text = originalText
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = originalColor
+                })
+                return
+            end
+        elseif isURL(input) and isImageURL(input) then
+            -- É URL de imagem - processar via API
+            Converted["_TextButton1"].Text = "processing..."
+            spr.target(Converted["_TextButton1"], 0.3, 6, {
+                TextColor3 = Color3.fromRGB(255, 200, 0)
+            })
+            
+            local success, result = processImageURL(input)
+            
+            if success then
+                jsonData = result
+                Converted["_TextButton1"].Text = "loaded!"
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = Color3.fromRGB(0, 255, 100)
+                })
+            else
+                Converted["_TextButton1"].Text = "API error"
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = Color3.fromRGB(255, 0, 0)
+                })
+                task.wait(2)
+                Converted["_TextButton1"].Text = originalText
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = originalColor
+                })
+                return
+            end
+        elseif isURL(input) then
+            -- É URL normal - tentar buscar JSON
+            local success, result = fetchJSONFromURL(input)
+            
+            if success then
+                jsonData = result
+            else
+                Converted["_TextButton1"].Text = "fetch error"
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = Color3.fromRGB(255, 0, 0)
+                })
+                task.wait(2)
+                Converted["_TextButton1"].Text = originalText
+                spr.target(Converted["_TextButton1"], 0.3, 6, {
+                    TextColor3 = originalColor
+                })
+                return
+            end
+        end
+        
+        local success, result = processImageData(jsonData)
+        
+        if success then
+            Converted["_TextButton1"].Text = "success!"
+            spr.target(Converted["_TextButton1"], 0.3, 6, {
+                TextColor3 = Color3.fromRGB(0, 255, 0)
+            })
+        else
+            Converted["_TextButton1"].Text = "error"
+            spr.target(Converted["_TextButton1"], 0.3, 6, {
+                TextColor3 = Color3.fromRGB(255, 0, 0)
+            })
+        end
+        
+        task.wait(2)
+        Converted["_TextButton1"].Text = originalText
+        spr.target(Converted["_TextButton1"], 0.3, 6, {
+            TextColor3 = originalColor
+        })
+    end)
+end)
+
+refreshFileList()
